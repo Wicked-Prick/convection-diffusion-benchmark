@@ -1,8 +1,8 @@
-#ifndef VAR_H
-#define VAR_H
+#ifndef _VAR_H_
+#define _VAR_H_
 #include <vector>
 
-namespace Var
+namespace var
 {
         const int L1 = 24 , M1 = 24, Lmax = 24;
         const double eps = 1.e-5, alltime = 10.;

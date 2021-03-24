@@ -9,49 +9,359 @@
 #include <fstream>
 
 using namespace std;
-using namespace Diff;
-using namespace Var;
+using namespace dif;
+using namespace var;
 
-ostream & operator << (ostream & os, const vector<double> & v)
+void Dif::coeff_of_conduct()
 {
-    for(auto i = 0; i < v.size(); ++i)
+    int i, j;
+                //#pragma omp parallel for private(i, Dw, De, Ds, Dn, Fw, Fe, Fs, Fn) default(shared)
+    for( j = 1; j < M2; ++j)
     {
-        os << "vector["<< i <<"]" << "=" << v[i] << endl;
+        for( i = 1; i < L2; ++i)
+        {
+            Dw = GAMI[i][j] * YCV[j] / XDIF[i];
+            De = GAMI[i + 1][j] * YCV[j] / XDIF[i + 1];
+            Ds = GAMJ[i][j] * XCV[i] / YDIF[j];
+            Dn = GAMJ[i][j + 1] * XCV[i] / YDIF[j + 1];    
+            DENSw = RHO[i - 1][j] + (RHO[i][j] - RHO[i - 1][j]) * (XU[i] - X[i - 1]) / XDIF[i];
+            DENSe = RHO[i][j] + (RHO[i + 1][j] - RHO[i][j]) * (XU[i + 1] - X[i]) / XDIF[i + 1];
+            DENSs = RHO[i][j - 1] + (RHO[i][j] - RHO[i][j - 1]) * (YV[j] - Y[j - 1]) / YDIF[j];
+            DENSn = RHO[i][j] + (RHO[i][j + 1] - RHO[i][j]) * (YV[j + 1] - Y[j]) / YDIF[j + 1];   
+            Fw = DENSw * U[i][j] * YCV[j];
+            Fe = DENSe * U[i][j] * YCV[j];
+            Fs = DENSs * V[i][j] * XCV[i];
+            Fn = DENSn * V[i][j] * XCV[i];         
+        }
+    } 
+}
+
+void Dif::solve()
+{
+    int i, j;
+    //---------------- X_dir ------------->
+                //#pragma omp parallel for private(i)
+    for(j = 1; j < M2; ++j)
+    {
+        for(i = 1;i < L2; ++i)
+        {
+            TEMPS[i][j] = B[i][j] + AJM[i][j] * T[i][j - 1] + AJP[i][j] * T[i][j + 1];
+        }
     }
-    return os;
+    
+    //#pragma omp parallel for private(i, DENOM, PT, QT) 
+    for(j = 1; j < M2; ++j)
+    {
+        PT[0] = 0.;
+        QT[0] = T[0][j];
+        for(i = 1; i < L2; ++i)
+        {
+            DENOM = AP[i][j] - PT[i - 1] * AIM[i][j];
+            PT[i] = AIP[i][j] / (DENOM + 1.e-30);
+            QT[i] = (TEMPS[i][j] + AIM[i][j] * QT[i - 1]) / (DENOM + 1.e-30);
+        }
+
+        for(i = L2 - 1; i > 1; --i)
+        {
+            T[i][j] = T[i + 1][j] * PT[i] + QT[i];
+        }
+    }
+    //----------------Y_dir ------------->
+    //#pragma omp parallel for private(i)
+    for(j = 1; j < M2; ++j)
+    {
+        for( i = 1;i < L2; ++i)
+        {
+            TEMPS[i][j] = B[i][j] + AIM[i][j] * T[i - 1][j] + AIP[i][j] * T[i + 1][j];
+        }
+    }
+    
+    //#pragma omp parallel for private(j, DENOM, PT, QT) 
+    for(i = 1; i < L2; ++i)
+    {
+        PT[0] = 0.;
+        QT[0] = T[i][0];
+        for( j = 1; j < M2; ++j)
+        {
+            DENOM = AP[i][j] - PT[j - 1] * AJM[i][j];
+            PT[j] = AIP[i][j] / (DENOM + 1.e-30);
+            QT[j] = (TEMPS[i][j] + AJM[i][j] * QT[j - 1]) / (DENOM + 1.e-30);
+        }
+        for( j = M2 - 1; j > 1; --j)
+        {
+            T[i][j] = T[i][j + 1] * PT[j] + QT[j];
+        }
+    }
+}   
+
+double Dif::alpha_param(double f)
+{
+    return f > 0. ? 1. : 0.;
+}  
+
+void Dif::gamsor()
+{
+    for(int j = 1; j < M2; ++j)
+    {
+        for(int i = 1; i < L2; ++i)
+        {
+            CON[i][j] = 0.;
+            APS[i][j] = 0.;
+            RHO[i][j] = 1.;           
+        }
+    }
+    for(int j = 1; j < M1; ++j)
+    {
+        for(int i = 1; i < L1; ++i)
+        {
+            GAMI[i][j] = 0.;
+            GAMJ[i][j] = 0.; 
+        }
+    }
+    /*for(int j = 1; j < M2; ++j)
+    {
+        for(int i = 1; i < L2; ++i)
+        {
+            CON[i][j] = - XCV[i] * YCV[j];
+            APS[i][j] = 0.;
+            RHO[i][j] = 1.;           
+        }
+    }
+
+    for(int j = 0; j < M1; ++j)
+    {
+        T[1][j] = -(TIME + Y[j] * Y[j]);
+    }
+    
+    for(int i = 0; i < L1; ++i)
+    {
+        T[i][1] = X[i] * X[i] - TIME;
+    }
+
+    for(int j = 1; j < M1; ++j)
+    {
+        for(int i = 1; i < L1; ++i)
+        {
+            GAMI[i][j] = 1.;
+            GAMJ[i][j] = 1.;
+            
+        }
+    }
+   
+    for(int i = 1; i < L1; ++i)
+    {
+        GAMJ[i][M1-1] = 0.;
+    }
+
+    for(int j = 1; j < M1; ++j)
+    {
+        GAMI[L1-1][j] = 0.;
+    }
+     
+    for(int j = 1; j < M2; ++j)
+    {
+        CON[L2][j] = CON[L2][j] + 2. * YCV[j];
+    } 
+
+    for(int i = 1; i < L2; ++i)
+    {
+        CON[i][M2] = CON[i][M2] - 2. * XCV[i];
+    } */
+}
+
+double Power_law::acof(double x, double y)
+{
+    return (x == 0) ? 0 : dmax1(0., pow(1. - 0.1 * fabs(y / x), 5)); 
+}
+
+void Power_law::neighbor_coeff()
+{
+    #pragma omp parallel for private(AP0, DT) default(shared)
+    for(int j = 1; j < M2 ; ++j)
+    {
+        for(int i = 1; i < L2 ; ++i)
+        {
+            max_Fw = dmax1(0., Fw);
+            max_Fe = dmax1(0., -Fe);
+            max_Fs = dmax1(0., Fs);
+            max_Fn = dmax1(0., -Fn);
+
+            acof_w = acof(Dw, Fw);
+            acof_e = acof(De, Fe);
+            acof_s = acof(Ds, Fs);
+            acof_n = acof(Dn, Fn);
+
+            AIM[i][j] = Dw * acof_w + max_Fw;
+            AIP[i][j] = De * acof_e + max_Fe;
+            AJM[i][j] = Ds * acof_s + max_Fs;
+            AJP[i][j] = Dn * acof_n + max_Fn;          
+        }
+    }
+    #pragma omp parallel for  
+    for(int j = 1; j < M2; ++j)
+    {
+        for(int i = 1; i < L2; ++i)
+        {
+            AP0 = RHO[i][j] * XCV[i] * YCV[j] / DT;
+            AP[i][j] = - APS[i][j] + AIM[i][j] + AIP[i][j]
+                        + AJM[i][j] + AJP[i][j] + AP0; 
+            B[i][j] = CON[i][j] + AP0 * T0[i][j];             
+        }
+    }  
+
+}
+
+void QUICK::neighbor_coeff()
+{
+    for(int j = 1; j < M2 ; ++j)
+    {
+        for(int i = 1; i < L2 ; ++i)
+        {
+            alpha_w = alpha_param(Fw);
+            alpha_e = alpha_param(Fe);
+            alpha_s = alpha_param(Fs);
+            alpha_n = alpha_param(Fn);
+
+            AIM[i][j] = Dw + 6./8. * alpha_w * Fw + 1./8. * alpha_e*Fe +
+                        3./8. * (1. - alpha_w) * Fw; 
+            AIP[i][j] = De - 3./8. * alpha_e * Fe - 6./8. *(1. - alpha_e)*Fe -
+                        1./8. * (1. - alpha_w)*Fw;
+            AJM[i][j] = Ds + 6./8. * alpha_s * Fs + 1./8. * alpha_n*Fn +
+                        3./8. * (1. - alpha_s) * Fs;
+            AJP[i][j] = Dn - 3./8. * alpha_n * Fn - 6./8. *(1. - alpha_n)*Fn -
+                        1./8. * (1. - alpha_s)*Fs;
+            
+            AIPP[i][j] = 1./8. * (1. - alpha_e)*Fe;
+            AJPP[i][j] = 1./8. * (1. - alpha_n)*Fn;                                                  
+        }
+    }
+    for(int j = 1; j < M2 ; ++j)
+    {
+        for(int i = 1; i < L2 ; ++i)
+        {
+            AP0 = RHO[i][j] * XCV[i] * YCV[j] / DT;
+            AP[i][j] = - APS[i][j] + AIM[i][j] + AIP[i][j]
+                        + AJM[i][j] + AJP[i][j] + AIPP[i][j] + AJPP[i][j] + AP0; 
+            B[i][j] = CON[i][j] + AP0  * T0[i][j];             
+        }
+    }   
+}
+
+double TVD::limiter_param(double grad)
+{
+    double psy;
+    
+    if(grad <= 0.) psy = 0.;
+    else if(grad > 0. && grad <= (1. / (2.+1.)) ) psy = (2. * grad) / 2.;
+    else if(grad > (1./(2.+1.)) && grad <= 0.5) psy = 0.5 - grad / 2.;
+    else if(grad > 0.5 && grad <= (2. / (2. + 1.)) ) psy = grad / 2.;
+    else if(grad > (2. / (2. + 1.)) && grad <= 1.) psy = ((1.- grad) * 2.) / 2.;
+    else if(grad >= 1.) psy = 0; 
+
+    return psy;
+}
+
+void TVD::neighbor_coeff()
+{
+    for( int j = 1; j < M2 ; ++j)
+    {
+        for( int i = 1; i < L2 ; ++i)
+        {
+            max_Fw = dmax1(0., Fw);
+            max_Fe = dmax1(0., -Fe);
+            max_Fs = dmax1(0., Fs);
+            max_Fn = dmax1(0., -Fn);
+            
+            alpha_w = alpha_param(Fw);
+            alpha_e = alpha_param(Fe);
+            alpha_s = alpha_param(Fs);
+            alpha_n = alpha_param(Fn);
+            
+            AIM[i][j] = Dw + max_Fw;
+            AIP[i][j] = De + max_Fe;
+            AJM[i][j] = Ds + max_Fs;
+            AJP[i][j] = Dn + max_Fn;
+ 
+            grad_nm = (T[i][j + 1] - T[i][j + 1]) / (T[i][j + 1] - T[i][j]); 
+            grad_sp = (T.at(i).at(j - 1) - T.at(i).at(j - 1)) / (T.at(i).at(j) - T.at(i).at(j - 1));
+            grad_em = (T.at(i + 1).at(j) - T.at(i + 1).at(j)) / (T.at(i + 1).at(j) - T.at(i).at(j));
+            grad_wp = (T.at(i - 1).at(j) - T.at(i - 1).at(j)) / (T.at(i).at(j) - T.at(i - 1).at(j));
+            grad_wm = (T.at(i + 1).at(j) - T.at(i).at(j)) / (T.at(i).at(j) - T.at(i - 1).at(j));
+            grad_ep = (T.at(i).at(j) - T.at(i - 1).at(j)) / (T.at(i + 1).at(j) - T.at(i).at(j));
+            grad_sm = (T[i][j - 1] - T[i][j]) / (T[i][j] - T[i][j - 1]);
+            grad_np = (T[i][j] - T[i][j - 1]) / (T[i][j + 1] - T[i][j]);
+           
+
+            psy_wp = limiter_param(grad_wp);
+            psy_wm = limiter_param(grad_wm);
+            psy_ep = limiter_param(grad_ep);
+            psy_em = limiter_param(grad_em);
+            psy_sm = limiter_param(grad_sm);
+            psy_sp = limiter_param(grad_sp);
+            psy_nm = limiter_param(grad_nm);
+            psy_np = limiter_param(grad_np);
+
+            CON[i][j] = 0.5 * Fe * ((1. - alpha_e) * psy_em - alpha_e * psy_ep) * 
+                        (T[i + 1][j] - T[i][j]) + 
+                        0.5 * Fw * (alpha_w * psy_wp - (1. - alpha_w) * psy_wm)  *
+                        (T[i][j] - T[i - 1][j]) +
+                        0.5 * Fn * ((1. - alpha_n) * psy_nm - alpha_n * psy_np) * 
+                        (T[i][j + 1] - T[i][j]) + 
+                        0.5 * Fs * (alpha_s * psy_sp - (1. - alpha_s) * psy_sm)  *
+                        (T[i][j] - T[i][j - 1]);
+
+        }
+    }
+    
+    for(int j = 1; j < M2; ++j)
+    {
+        for(int i = 1; i < L2; ++i)
+        {
+            AP0 = RHO[i][j] * XCV[i] * YCV[j] / DT;
+            AP[i][j] = - APS[i][j] + AIM[i][j] + AIP[i][j]
+                        + AJM[i][j] + AJP[i][j] + AP0; 
+            B[i][j] = CON[i][j] + AP0 * T0[i][j];             
+        }
+    }  
 }
 
 vector<double> operator *(const vector< double> &x,const  vector<double> &y)
 {
-    vector<double> res = x;
-    res.resize(x.size());
-    for (int i = 0; i < res.size() && i < y.size(); i++) {
-        res[i] *= y[i];
+    vector<double> _temp = x;
+    _temp.resize(x.size());
+    
+    for (int i = 0; i < _temp.size() && i < y.size(); i++) 
+    {
+        _temp[i] *= y[i];
     }
     
-    return res;
+    return _temp;
 }
 
 vector<double> operator -(const vector< double> &x,const  vector<double> &y)
 {
-    vector<double> res = x;
-    res.resize(x.size());
-    for (int i = 0; i < res.size() && i < y.size(); i++) {
-        res[i] -= y[i];
+    vector<double> _temp = x;
+    _temp.resize(x.size());
+    
+    for (int i = 0; i < _temp.size() && i < y.size(); i++) 
+    {
+        _temp[i] -= y[i];
     }
     
-    return res;
+    return _temp;
 }
 
 vector<double> operator -(const vector< double> &x, double y)
 {
-    vector<double> res = x;
-    res.resize(x.size());
-    for (int i = 0; i < res.size(); i++) {
-        res[i] -= y;
+    vector<double> _temp = x;
+    _temp.resize(x.size());
+    
+    for (int i = 0; i < _temp.size(); i++) 
+    {
+        _temp[i] -= y;
     }
     
-    return res;
+    return _temp;
 }
 
 double dmax1(double x, double y)
@@ -61,9 +371,9 @@ double dmax1(double x, double y)
 
 vector <double> fan(const vector <double>  &x, const  vector <double>  &y,  double z)
 {
-    vector<double> tmp(L1);
-    tmp = x*x - y*y - z ;
-    return tmp;
+    vector<double> _temp(L1);
+    _temp = x*x - y*y - z ;
+    return _temp;
 }
 
 void start()
@@ -193,8 +503,6 @@ void grid1(int n,  double a, double b, vector <double> &cv, vector <double> &nod
     node[n] = cv[n];  
 }
 
-
-
 void output()
 {
     delT = 0.;
@@ -254,19 +562,18 @@ void allfile()
             --j;
     }
     ost.close();
-
 }
 
 int main()
 {
     double ftime, etime, exec_time;
-    power_law pw;
+    Power_law pw;
     QUICK qk;
     TVD tvd;
     start();
     ftime = omp_get_wtime(); 
 
-    while(TIME <= (alltime - 0.5*DT))
+    while(TIME <= (alltime - 0.5 * DT))
     {
         TIME += DT;
         RMAX = 1.;
